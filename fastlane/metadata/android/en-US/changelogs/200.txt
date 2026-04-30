@@ -1,0 +1,2 @@
+- Updated some dependencies.
+- Fixed: Ollama thinking mode not respecting "Disable Reasoning" setting

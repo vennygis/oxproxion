@@ -27,6 +27,7 @@ data class ChatRequest(
     val modalities: List<String>? = null,
     @SerialName("chat_template_kwargs")
     val chatTemplateKwargs: Map<String, JsonElement>? = null,
+    @SerialName("reasoning_effort") val reasoningEffort: String? = null,  // ADD THIS
     val logprobs: Boolean? = null,
     val think: Boolean? = null,
     @SerialName("image_config")  // NEW: Optional for Gemini

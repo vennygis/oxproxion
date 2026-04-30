@@ -2828,9 +2828,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 12000
             }
+            val isReasoningModel = isReasoningModel(_activeChatModel.value)
+            val lanProvider = sharedPreferencesHelper.getLanProvider()
             val llamaCppKwargs = if (
-                sharedPreferencesHelper.getLanProvider() == LAN_PROVIDER_LLAMA_CPP &&
-                isReasoningModel(_activeChatModel.value)
+                lanProvider == LAN_PROVIDER_LLAMA_CPP &&
+                isReasoningModel
             ) {
                 mapOf("enable_thinking" to JsonPrimitive(_isReasoningEnabled.value == true))
             } else null
@@ -2840,10 +2842,12 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 messages = messagesForApiRequest,
                 stream = true,
                 max_tokens = maxTokens,
-                think = if (isReasoningModel(_activeChatModel.value) &&
-                    sharedPreferencesHelper.getLanProvider() == LAN_PROVIDER_OLLAMA
-                ) {
+                think = if (isReasoningModel && lanProvider == LAN_PROVIDER_OLLAMA) {
                     _isReasoningEnabled.value
+                } else null,
+                // ADD THIS: For Ollama OpenAI-compatible endpoint
+                reasoningEffort = if (isReasoningModel && lanProvider == LAN_PROVIDER_OLLAMA) {
+                    if (_isReasoningEnabled.value == true) null else "none"
                 } else null,
                 // NEW: Add the llama.cpp specific logic
                 chatTemplateKwargs = llamaCppKwargs,
@@ -3481,26 +3485,29 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (e: Exception) {
                     12000
                 }
+                val isReasoningModel = isReasoningModel(_activeChatModel.value)
+                val lanProvider = sharedPreferencesHelper.getLanProvider()
 
                 val llamaCppKwargs = if (
-                    sharedPreferencesHelper.getLanProvider() == LAN_PROVIDER_LLAMA_CPP &&
-                    isReasoningModel(_activeChatModel.value)
+                    lanProvider == LAN_PROVIDER_LLAMA_CPP &&
+                    isReasoningModel
                 ) {
-                    // We pass the current state of your toggle to the "enable_thinking" key
                     mapOf("enable_thinking" to JsonPrimitive(_isReasoningEnabled.value == true))
                 } else {
                     null
                 }
+
                 val chatRequest = ChatRequest(
                     model = modelForRequest,
                     messages = messagesForApiRequest,
-                    think = if (isReasoningModel(_activeChatModel.value) &&
-                        sharedPreferencesHelper.getLanProvider() == LAN_PROVIDER_OLLAMA
-                    ) {
+                    think = if (isReasoningModel && lanProvider == LAN_PROVIDER_OLLAMA) {
                         _isReasoningEnabled.value
                     } else null,
+                    // ADD THIS: For Ollama OpenAI-compatible endpoint
+                    reasoningEffort = if (isReasoningModel && lanProvider == LAN_PROVIDER_OLLAMA) {
+                        if (_isReasoningEnabled.value == true) null else "none"
+                    } else null,
                     chatTemplateKwargs = llamaCppKwargs,
-
                     max_tokens = maxTokens,
                     tools = if (_isToolsEnabled.value == true) buildTools() else null,
                     toolChoice = if (_isToolsEnabled.value == true) "auto" else null
@@ -4443,6 +4450,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         } else {
                             null
                         }
+                        val reasoningEffortParam = if (isLanModel && lanProvider == LAN_PROVIDER_OLLAMA && isReasoningModel) {
+                            "none"
+                        } else {
+                            null
+                        }
 
                         /* val llamaCppKwargs = if (isLanModel && lanProvider == SharedPreferencesHelper.LAN_PROVIDER_LLAMA_CPP && isReasoningModel) {
                              mapOf("enable_thinking" to JsonPrimitive(false))
@@ -4481,6 +4493,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
                             if (thinkParam != null) {
                                 put("think", JsonPrimitive(thinkParam))
+                            }
+                            if (reasoningEffortParam != null) {
+                                put("reasoning_effort", JsonPrimitive(reasoningEffortParam))
                             }
                             if (isLanModel && lanProvider == LAN_PROVIDER_LLAMA_CPP && isReasoningModel) {
                                 put("chat_template_kwargs", buildJsonObject { // <--- MUST BE SNAKE_CASE HERE
@@ -4575,6 +4590,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                             // Dynamic Parameter Injection
                             if (isLanModel && lanProvider == LAN_PROVIDER_OLLAMA && isReasoningModel) {
                                 put("think", JsonPrimitive(false))
+                                put("reasoning_effort", JsonPrimitive("none"))  // ADD THIS
                             }
                             if (isLanModel && lanProvider == LAN_PROVIDER_LLAMA_CPP && isReasoningModel) {
                                 put("chat_template_kwargs", buildJsonObject { // <--- MUST BE SNAKE_CASE HERE
