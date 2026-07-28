@@ -119,6 +119,7 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
+import kotlin.text.toLong
 import kotlin.time.Duration.Companion.milliseconds
 
 @Serializable
@@ -225,6 +226,46 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
                     writeTimeout(timeoutMs, TimeUnit.MILLISECONDS)
                     connectTimeout(60_000L, TimeUnit.MILLISECONDS)
+                }
+            }
+        }
+    }
+    private fun createTransLanHttpClient(): HttpClient {
+        val timeoutMs = sharedPreferencesHelper.getTimeoutMinutes().toLong() * 60_000L
+
+        return HttpClient(OkHttp) {
+            install(ContentNegotiation) {
+                json(Json { ignoreUnknownKeys = true })
+            }
+            install(DefaultRequest) {
+                header("User-Agent", "oxproxion/${BuildConfig.VERSION_NAME}")
+            }
+
+            engine {
+                config {
+                    // Disable connection pooling specifically for STT to avoid stale socket errors
+                    connectionPool(okhttp3.ConnectionPool(0, 1, TimeUnit.NANOSECONDS))
+                    retryOnConnectionFailure(true)
+
+                    // --- START SSL BYPASS (Strictly for LAN) ---
+                    val trustAllCerts = object : X509TrustManager {
+                        override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                        override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                        override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                    }
+                    val sslContext = SSLContext.getInstance("SSL")
+                    sslContext.init(null, arrayOf(trustAllCerts), SecureRandom())
+
+                    sslSocketFactory(sslContext.socketFactory, trustAllCerts)
+                    hostnameVerifier { _, _ -> true }
+                    // --- END SSL BYPASS ---
+
+                    addInterceptor(CompressionInterceptor(Gzip))
+                    addInterceptor(BrotliInterceptor)
+                    readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                    callTimeout(timeoutMs, TimeUnit.MILLISECONDS)
+                    writeTimeout(30_000L, TimeUnit.MILLISECONDS)
+                    connectTimeout(30_000L, TimeUnit.MILLISECONDS)
                 }
             }
         }
@@ -417,6 +458,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private var pendingUserImageUri: String? = null  // String (toString())
     private var httpClient: HttpClient
     private var lanHttpClient: HttpClient
+    private var lanTranscriptionHttpClient: HttpClient
     private var llmService: LlmService
     private val sharedPreferencesHelper: SharedPreferencesHelper = SharedPreferencesHelper(application)
     //private val soundManager: SoundManager
@@ -433,6 +475,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         })
         httpClient = createHttpClient()
         lanHttpClient = createLanHttpClient()
+        lanTranscriptionHttpClient = createTransLanHttpClient()
+
         /*httpClient = HttpClient(OkHttp) {
             install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
             engine {
@@ -838,63 +882,87 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         return withContext(Dispatchers.IO) {
-            try {
-                if (provider == "cloud") {
-                    if (activeChatApiKey.isBlank()) {
-                        _toastUiEvent.postValue(Event("OpenRouter API key not set"))
-                        return@withContext null
-                    }
-                    val base64Audio = Base64.getEncoder().encodeToString(audioBytes)
-                    val requestBody = buildJsonObject {
-                        put("model", JsonPrimitive(modelId))
-                        putJsonObject("input_audio") {
-                            put("data", JsonPrimitive(base64Audio))
-                            put("format", JsonPrimitive(audioFormat))
+            var lastException: Exception? = null
+
+            // Try up to 2 times to handle stale sockets cleanly
+            repeat(2) { attempt ->
+                try {
+                    if (provider == "cloud") {
+                        if (activeChatApiKey.isBlank()) {
+                            _toastUiEvent.postValue(Event("OpenRouter API key not set"))
+                            return@withContext null
                         }
-                    }
-                    val response = httpClient.post("https://openrouter.ai/api/v1/audio/transcriptions") {
-                        header("Authorization", "Bearer $activeChatApiKey")
-                        contentType(ContentType.Application.Json)
-                        setBody(requestBody)
-                    }
-                    if (!response.status.isSuccess()) {
-                        val errorBody = try { response.bodyAsText() } catch (_: Exception) { "No details" }
-                        _toastUiEvent.postValue(Event("Cloud transcription failed: ${response.status}"))
-                        return@withContext null
-                    }
-                    val result = response.body<JsonObject>()
-                    result["text"]?.jsonPrimitive?.content
-                } else {
-                    val lanEndpoint = sharedPreferencesHelper.getLanEndpoint()
-                    if (lanEndpoint.isNullOrBlank()) {
-                        _toastUiEvent.postValue(Event("LAN endpoint not configured"))
-                        return@withContext null
-                    }
-                    val lanKey = sharedPreferencesHelper.getLanApiKey()
-                    val response = lanHttpClient.submitFormWithBinaryData(
-                        url = "$lanEndpoint/v1/audio/transcriptions",
-                        formData = formData {
-                            append("file", audioBytes, Headers.build {
-                                append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
-                                append(HttpHeaders.ContentType, "audio/$audioFormat")
-                            })
-                            append("model", modelId)
+                        val base64Audio = Base64.getEncoder().encodeToString(audioBytes)
+                        val requestBody = buildJsonObject {
+                            put("model", JsonPrimitive(modelId))
+                            putJsonObject("input_audio") {
+                                put("data", JsonPrimitive(base64Audio))
+                                put("format", JsonPrimitive(audioFormat))
+                            }
                         }
-                    ) {
-                        header("Authorization", "Bearer ${if (lanKey.isNullOrBlank()) "any-non-empty-string" else lanKey}")
+                        val response = httpClient.post("https://openrouter.ai/api/v1/audio/transcriptions") {
+                            header("Authorization", "Bearer $activeChatApiKey")
+                            contentType(ContentType.Application.Json)
+                            setBody(requestBody)
+                        }
+                        if (!response.status.isSuccess()) {
+                            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "No details" }
+                            _toastUiEvent.postValue(Event("Cloud transcription failed: ${response.status}"))
+                            return@withContext null
+                        }
+                        val result = response.body<JsonObject>()
+                        return@withContext result["text"]?.jsonPrimitive?.content
+                    } else {
+                        val lanEndpoint = sharedPreferencesHelper.getLanEndpoint()
+                        if (lanEndpoint.isNullOrBlank()) {
+                            _toastUiEvent.postValue(Event("LAN endpoint not configured"))
+                            return@withContext null
+                        }
+                        val lanKey = sharedPreferencesHelper.getLanApiKey()
+
+                        // Uses the dedicated transcription client here
+                        val response = lanTranscriptionHttpClient.submitFormWithBinaryData(
+                            url = "$lanEndpoint/v1/audio/transcriptions",
+                            formData = formData {
+                                append("file", audioBytes, Headers.build {
+                                    append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
+                                    append(HttpHeaders.ContentType, "audio/$audioFormat")
+                                })
+                                append("model", modelId)
+                            }
+                        ) {
+                            header("Authorization", "Bearer ${if (lanKey.isNullOrBlank()) "any-non-empty-string" else lanKey}")
+                            header(HttpHeaders.Connection, "close") // Explicit request to close connection after completion
+                        }
+                        if (!response.status.isSuccess()) {
+                            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "No details" }
+                            _toastUiEvent.postValue(Event("LAN transcription failed: ${response.status} - $errorBody"))
+                            return@withContext null
+                        }
+                        val result = response.body<JsonObject>()
+                        return@withContext result["text"]?.jsonPrimitive?.content
                     }
-                    if (!response.status.isSuccess()) {
-                        val errorBody = try { response.bodyAsText() } catch (_: Exception) { "No details" }
-                        _toastUiEvent.postValue(Event("LAN transcription failed: ${response.status} - $errorBody"))
+                } catch (e: Exception) {
+                    lastException = e
+                    val message = e.message ?: ""
+
+                    // Identify stale connection / unexpected end of stream errors
+                    val isStaleSocket = e is java.io.EOFException ||
+                            message.contains("unexpected end of stream", ignoreCase = true) ||
+                            message.contains("Connection reset", ignoreCase = true) ||
+                            message.contains("Broken pipe", ignoreCase = true)
+
+                    // If not a socket error or this was our second attempt, log & surface the toast
+                    if (!isStaleSocket || attempt == 1) {
+                        _toastUiEvent.postValue(Event("Transcription error: ${e.message}"))
                         return@withContext null
                     }
-                    val result = response.body<JsonObject>()
-                    result["text"]?.jsonPrimitive?.content
+
+                    // Brief delay to let the socket reset before retrying
+                    delay(200L.milliseconds)
                 }
-            } catch (e: Exception) {
-                _toastUiEvent.postValue(Event("Transcription error: ${e.message}"))
-                null
             }
+            null
         }
     }
 

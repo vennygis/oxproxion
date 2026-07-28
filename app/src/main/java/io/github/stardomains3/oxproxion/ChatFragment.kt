@@ -144,6 +144,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat), OnKeyboardShortcutListene
     private var currentSpeakingPosition = -1
     private lateinit var settingsButton: MaterialButton
     private lateinit var homeButton: MaterialButton
+    private var recordStartMs = 0L
     private lateinit var presetsButton: MaterialButton
     private lateinit var presetsButton2: MaterialButton
     private lateinit var attachmentButton: MaterialButton
@@ -1371,6 +1372,8 @@ class ChatFragment : Fragment(R.layout.fragment_chat), OnKeyboardShortcutListene
         if (viewModel.activeModelIsLan()) {
             checkLocalNetworkPermission()
         }
+        // Clean up any orphaned voice recordings from previous sessions
+        clearStaleVoiceFiles()
         // end onviewcreated
     }
 
@@ -2061,10 +2064,7 @@ $cleanContent
                 .show()
         }
         centerWatermarkIcon.setOnTouchListener { v, event ->
-            // Check if the feature is enabled in settings
             val isFeatureEnabled = sharedPreferencesHelper.getWatermarkSttEnabled()
-
-            // Only allow interaction if feature is ON and chat is empty
             val isChatEmpty = viewModel.chatMessages.value.isNullOrEmpty()
 
             if (!isFeatureEnabled || !isChatEmpty) {
@@ -2073,39 +2073,40 @@ $cleanContent
 
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    // START RECORDING
+                    // Prevent parent scroll views from stealing the gesture
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+
                     if (ContextCompat.checkSelfPermission(requireContext(), Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                         permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                     } else {
                         startVoiceRecording()
                         fromWater = true
-                        // Visual Feedback: Grow the icon
-                        v.animate()
-                            .scaleX(2.6f)
-                            .scaleY(2.6f)
-                            .setDuration(300)
-                            .start()
+                        v.animate().scaleX(2.6f).scaleY(2.6f).setDuration(300).start()
                     }
-                    true // Consume event
+                    true
+                }
+
+                MotionEvent.ACTION_MOVE -> {
+                    // Keep disallowing parent intercept while finger is moving/holding
+                    v.parent?.requestDisallowInterceptTouchEvent(true)
+                    true
                 }
 
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    // STOP RECORDING
+                    // Release parent lock and stop recording
+                    v.parent?.requestDisallowInterceptTouchEvent(false)
+
                     if (isRecording) {
                         stopVoiceRecording()
-
-                        // Visual Feedback: Reset icon size
-                        v.animate()
-                            .scaleX(1.0f)
-                            .scaleY(1.0f)
-                            .setDuration(300)
-                            .start()
+                        v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(300).start()
                     }
-                    true // Consume event
+                    true
                 }
+
                 else -> false
             }
         }
+
 
 // IMPORTANT: Remove the OnLongClickListener to prevent conflict with OnTouchListener
         centerWatermarkIcon.setOnLongClickListener { true }
@@ -4271,41 +4272,77 @@ $cleanContent
         }
     }
 
-    private fun stopVoiceRecording() {
-        try {
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
-            mediaRecorder = null
-            isRecording = false
-            speechButton.setIconResource(R.drawable.ic_mic) // Original mic icon
-            speechButton.isSelected = false
 
-            voiceRecordFile?.let { file ->
-                if (file.exists() && file.length() > 0) {
-                    processVoiceRecording(file)
-                } else {
-                    Toast.makeText(requireContext(), "Recording was empty", Toast.LENGTH_SHORT).show()
-                    file.delete()
-                }
+
+// Make sure to set: recordStartMs = System.currentTimeMillis() inside startVoiceRecording()!
+
+    private fun stopVoiceRecording() {
+        val duration = System.currentTimeMillis() - recordStartMs
+        val recorder = mediaRecorder
+
+        // Clear references immediately
+        mediaRecorder = null
+        isRecording = false
+
+        var stopSuccessful = true
+
+        // 1. Safely stop and release native resources
+        try {
+            if (duration >= 400) { // Ignore accidental taps under 400ms
+                recorder?.stop()
+            } else {
+                stopSuccessful = false
             }
         } catch (e: Exception) {
-           // Log.e("ChatFragment", "Failed to stop recording", e)
-            isRecording = false
-            speechButton.setIconResource(R.drawable.ic_mic)
-            speechButton.isSelected = false
+           // Log.e("ChatFragment", "Failed to stop MediaRecorder", e)
+            stopSuccessful = false
+        } finally {
+            // ALWAYS release, even if stop() throws an exception
+            try {
+                recorder?.release()
+            } catch (e: Exception) {
+              //  Log.e("ChatFragment", "Failed to release MediaRecorder", e)
+            }
+        }
+
+        // 2. Reset UI
+        speechButton.setIconResource(R.drawable.ic_mic)
+        speechButton.isSelected = false
+
+        // 3. Process or cleanup the recorded file
+        val file = voiceRecordFile
+        voiceRecordFile = null
+
+        if (stopSuccessful && duration >= 400 && file != null && file.exists() && file.length() > 1024) {
+            processVoiceRecording(file)
+        } else {
+            file?.delete()
+            if (duration < 400) {
+                Toast.makeText(requireContext(), "Hold button to speak", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(requireContext(), "Recording failed or was empty", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
+    private fun clearStaleVoiceFiles() {
+        try {
+            requireContext().cacheDir.listFiles { file ->
+                file.name.startsWith("voice_input_") && file.name.endsWith(".opus")
+            }?.forEach { file ->
+                file.delete()
+            }
+        } catch (e: Exception) {
+          //  Log.e("ChatFragment", "Failed to clear stale voice files", e)
+        }
+    }
     private fun processVoiceRecording(file: File) {
         lifecycleScope.launch {
             try {
                 val audioBytes = withContext(Dispatchers.IO) {
                     file.readBytes()
                 }
-
-                if(!fromWater) {
+                if (!fromWater) {
                     Toast.makeText(requireContext(), "Transcribing...", Toast.LENGTH_SHORT).show()
                 }
                 val transcribedText = viewModel.transcribeAudioForInput(
@@ -4315,26 +4352,32 @@ $cleanContent
                 )
 
                 if (!transcribedText.isNullOrBlank()) {
-                    if(fromWater){
+                    if (fromWater) {
                         val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         val clip = ClipData.newPlainText("Transcribed Text", transcribedText)
-                        clipboard.setPrimaryClip(clip)}
+                        clipboard.setPrimaryClip(clip)
+                    }
                     chatEditText.setText(transcribedText)
                     chatEditText.setSelection(transcribedText.length)
-                    // Toast.makeText(requireContext(), "Transcription complete", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(requireContext(), "Transcription failed", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
-              //  Log.e("ChatFragment", "Voice processing error", e)
+                withContext(Dispatchers.Main) {
+                    chatEditText.setText("Error: ${e.message}")
+                }
                 Toast.makeText(requireContext(), "Error: ${e.message}", Toast.LENGTH_SHORT).show()
             } finally {
-                file.delete()
+                // Guarantee file cleanup and state reset
+                if (file.exists()) {
+                    file.delete()
+                }
                 voiceRecordFile = null
                 fromWater = false
             }
         }
     }
+
     private fun substituteVariables(input: String): String {
         if (!input.contains("{{ox")) return input  // 🔥 EARLY EXIT: Instant if no vars (99% cases)
 

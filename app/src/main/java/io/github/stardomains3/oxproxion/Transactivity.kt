@@ -35,6 +35,7 @@ class Transactivity : AppCompatActivity() {
 
     private var mediaRecorder: MediaRecorder? = null
     private var voiceRecordFile: File? = null
+    private var recordStartMs = 0L
     private var isRecording = false
 
     // UI Elements
@@ -130,36 +131,50 @@ class Transactivity : AppCompatActivity() {
 
 
     private fun stopVoiceRecording() {
+        val duration = System.currentTimeMillis() - recordStartMs
+        val recorder = mediaRecorder
+
+        mediaRecorder = null
+        isRecording = false
+        btnAction.visibility = View.GONE
+
+        var stopSuccessful = true
+
         try {
-            // Use a try-catch specifically for stop() because it's the most common crash point
-            try {
-                mediaRecorder?.stop()
-            } catch (e: RuntimeException) {
-                // stop() can fail if no audio was actually recorded
-                //Log.e("Transactivity", "Stop failed: no audio recorded")
-            }
-
-            mediaRecorder?.release()
-            mediaRecorder = null
-            isRecording = false
-            btnAction.visibility = View.GONE
-
-
-            voiceRecordFile?.let { file ->
-                if (file.exists() && file.length() > 0) {
-                    processVoiceRecording(file)
-                } else {
-                    tvStatus.text = "Error: Empty recording"
-                    file.delete()
-                }
+            if (duration >= 400) {
+                recorder?.stop()
+            } else {
+                stopSuccessful = false
             }
         } catch (e: Exception) {
-            //Log.e("Transactivity", "Failed to stop recording", e)
-            isRecording = false
-            btnAction.text = "Start Recording"
+            // Log removed for F-Droid version
+            stopSuccessful = false
+        } finally {
+            // GUARANTEED RELEASE
+            try {
+                recorder?.release()
+            } catch (e: Exception) {
+                // Log removed for F-Droid version
+            }
+        }
+
+        val file = voiceRecordFile
+        voiceRecordFile = null
+
+        if (stopSuccessful && duration >= 400 && file != null && file.exists() && file.length() > 1024) {
+            processVoiceRecording(file)
+        } else {
+            file?.delete()
+            if (duration < 400) {
+                tvStatus.text = "Recording was too short"
+            } else {
+                tvStatus.text = "Error: Empty or corrupted recording"
+            }
+            btnAction.text = "Try Again"
             btnAction.visibility = View.VISIBLE
         }
     }
+
 
     private fun processVoiceRecording(file: File) {
         lifecycleScope.launch {
@@ -217,5 +232,19 @@ class Transactivity : AppCompatActivity() {
         clipboard.setPrimaryClip(clip)
         // Note: Android 13+ shows its own system toast for clipboard,
         // so we don't need to add one manually.
+    }
+    override fun onPause() {
+        super.onPause()
+        if (isRecording) {
+            // Stop recording and release mic if app goes to background
+            try {
+                mediaRecorder?.stop()
+            } catch (_: Exception) {}
+            try {
+                mediaRecorder?.release()
+            } catch (_: Exception) {}
+            mediaRecorder = null
+            isRecording = false
+        }
     }
 }

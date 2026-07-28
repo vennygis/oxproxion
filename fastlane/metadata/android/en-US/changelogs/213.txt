@@ -1,0 +1,7 @@
+- Updated a couple dependencies.
+
+🎙️ Voice Transcription & Audio Improvements
+• Fixed Network Reliability: Resolved unexpected end of stream errors on local transcription requests by using a dedicated, unpooled HTTP client with automated retries.
+• Hardened Touch Gestures: Prevented parent scroll views from stealing touch events while holding the watermark recording icon.
+• Audio Hardware Safeguards: Ensured MediaRecorder resources are always safely released to prevent microphone locks and added a minimum duration threshold to discard accidental taps.
+• Cache Management: Improved temporary audio file cleanup on upload completion and app startup.
