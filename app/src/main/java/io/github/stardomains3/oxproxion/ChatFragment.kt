@@ -43,7 +43,6 @@ import android.text.method.LinkMovementMethod
 import android.text.style.BackgroundColorSpan
 import android.text.util.Linkify
 import android.util.Base64
-import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.KeyEvent
@@ -107,10 +106,12 @@ import io.noties.markwon.html.HtmlPlugin
 import io.noties.markwon.image.coil.CoilImagesPlugin
 import io.noties.markwon.linkify.LinkifyPlugin
 import io.noties.markwon.movement.MovementMethodPlugin
+import io.noties.markwon.simple.ext.SimpleExtPlugin
 import io.noties.markwon.syntax.Prism4jThemeDarkula
 import io.noties.markwon.syntax.SyntaxHighlightPlugin
 import io.noties.prism4j.Prism4j
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -120,14 +121,11 @@ import kotlinx.serialization.json.buildJsonArray
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import io.noties.markwon.simple.ext.SimpleExtPlugin
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
-import kotlin.ranges.contains
-import kotlin.text.get
-import kotlin.text.set
+import kotlin.time.Duration.Companion.milliseconds
 
 interface OnKeyboardShortcutListener {
     fun handleKeyDown(keyCode: Int, event: KeyEvent?): Boolean
@@ -196,6 +194,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat), OnKeyboardShortcutListene
     private lateinit var buttonsRow2: LinearLayout
     private lateinit var chatInputContainer: LinearLayout
     private lateinit var expandedButtonContainer: LinearLayout
+    private lateinit var tempCopyButton: MaterialButton
     private lateinit var leftButtonContainer: LinearLayout
     private lateinit var rightButtonContainer: LinearLayout
     private lateinit var menuButton: MaterialButton
@@ -477,6 +476,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat), OnKeyboardShortcutListene
         buttonsRow2 = view.findViewById(R.id.buttonsRow2)
         chatInputContainer = view.findViewById(R.id.chatInputContainer)
         expandedButtonContainer = view.findViewById(R.id.expandedButtonContainer)
+        tempCopyButton = view.findViewById(R.id.tempCopyButton)
         leftButtonContainer = view.findViewById(R.id.leftButtonContainer)
         rightButtonContainer = view.findViewById(R.id.rightButtonContainer)
         extendedTopBarContainer =  view.findViewById(R.id.extendedTopBarContainer)
@@ -1795,6 +1795,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat), OnKeyboardShortcutListene
             }
         }
         sendChatButton.setOnClickListener {
+            tempCopyButton.visibility = View.GONE
             if (viewModel.isAwaitingResponse.value == true) {
                 hasScrolled = false
                 viewModel.cancelCurrentRequest()
@@ -2011,6 +2012,7 @@ $cleanContent
                 .commit()
         }
         resetChatButton.setOnLongClickListener {
+            tempCopyButton.visibility = View.GONE
            /* if (ForegroundService.isRunningForeground && sharedPreferencesHelper.getNotiPreference()) {
                 val apiIdentifier = viewModel.activeChatModel.value ?: "Unknown Model"
                 val displayName = viewModel.getModelDisplayName(apiIdentifier)
@@ -2029,6 +2031,7 @@ $cleanContent
             true
         }
         resetChatButton.setOnClickListener {
+            tempCopyButton.visibility = View.GONE
             if (viewModel.chatMessages.value.isNullOrEmpty()) {
                 return@setOnClickListener
             }
@@ -2403,6 +2406,7 @@ $cleanContent
 
 
         menuButton.setOnClickListener {
+            tempCopyButton.visibility = View.GONE
             if (headerContainer.isVisible) {
                 hideMenu()
             } else {
@@ -2740,6 +2744,7 @@ $cleanContent
 
 
         utilityButton.setOnClickListener {
+            tempCopyButton.visibility = View.GONE
             val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clip = clipboard.primaryClip
             if (clip != null && clip.itemCount > 0) {
@@ -2781,6 +2786,7 @@ $cleanContent
             true
         }
         speechButton.setOnClickListener {
+            tempCopyButton.visibility = View.GONE
             if (isRecording) {
                 // If already recording, a single tap stops it
                 stopVoiceRecording()
@@ -2794,6 +2800,7 @@ $cleanContent
             }
         }
         speechButton.setOnLongClickListener {
+            tempCopyButton.visibility = View.GONE
             if (isRecording) {
                 stopVoiceRecording()
             } else {
@@ -2803,6 +2810,7 @@ $cleanContent
         }
 
         clearButton.setOnClickListener {
+            tempCopyButton.visibility = View.GONE
             chatEditText.text.clear()
         }
         clearButton.setOnLongClickListener {
@@ -4336,6 +4344,35 @@ $cleanContent
           //  Log.e("ChatFragment", "Failed to clear stale voice files", e)
         }
     }
+    private fun showCopyButton(text: String) {
+        // Show the button
+        tempCopyButton.visibility = View.VISIBLE
+
+        // Setup the click action
+        tempCopyButton.setOnClickListener {
+            val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = ClipData.newPlainText("Transcribed Text", text)
+            clipboard.setPrimaryClip(clip)
+
+
+            tempCopyButton.visibility = View.GONE
+        }
+        tempCopyButton.setOnLongClickListener {
+            val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = ClipData.newPlainText("Transcribed Text", text)
+            clipboard.setPrimaryClip(clip)
+
+            chatEditText.text.clear()
+            tempCopyButton.visibility = View.GONE
+            true
+        }
+
+        // Auto-hide after 4 seconds
+        lifecycleScope.launch {
+            delay(6000.milliseconds)
+            tempCopyButton.visibility = View.GONE
+        }
+    }
     private fun processVoiceRecording(file: File) {
         lifecycleScope.launch {
             try {
@@ -4352,13 +4389,14 @@ $cleanContent
                 )
 
                 if (!transcribedText.isNullOrBlank()) {
-                    if (fromWater) {
+                    /*if (fromWater) {
                         val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         val clip = ClipData.newPlainText("Transcribed Text", transcribedText)
                         clipboard.setPrimaryClip(clip)
-                    }
+                    }*/
                     chatEditText.setText(transcribedText)
                     chatEditText.setSelection(transcribedText.length)
+                    showCopyButton(transcribedText)
                 } else {
                     Toast.makeText(requireContext(), "Transcription failed", Toast.LENGTH_SHORT).show()
                 }

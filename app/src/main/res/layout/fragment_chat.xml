@@ -904,6 +904,24 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
                 android:gravity="bottom">
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/tempCopyButton"
+                    style="@style/Widget.Material3.Button.IconButton.Filled"
+                    app:icon="@drawable/ic_copi"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    app:iconSize="24dp"
+                    app:iconPadding="0dp"
+                    app:cornerRadius="24dp"
+                    app:iconGravity="textStart"
+                    app:backgroundTint="@color/button_background_col"
+                    app:iconTint="#A8A8A8"
+                    android:layout_marginBottom="2dp"
+                    android:visibility="gone"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:insetLeft="0dp"
+                    android:insetRight="0dp" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/menuButton"

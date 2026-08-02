@@ -1,7 +1,6 @@
 package io.github.stardomains3.oxproxion
 
 import android.Manifest
-import io.github.stardomains3.oxproxion.BuildConfig
 import android.app.Application
 import android.content.ContentResolver
 import android.content.ContentValues
@@ -32,6 +31,7 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.viewModelScope
 import com.google.openlocationcode.OpenLocationCode
+import io.github.stardomains3.oxproxion.BuildConfig
 import io.github.stardomains3.oxproxion.SharedPreferencesHelper.Companion.LAN_PROVIDER_LLAMA_CPP
 import io.github.stardomains3.oxproxion.SharedPreferencesHelper.Companion.LAN_PROVIDER_OLLAMA
 import io.ktor.client.HttpClient
@@ -77,7 +77,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
-import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -119,7 +118,6 @@ import javax.net.ssl.SSLContext
 import javax.net.ssl.X509TrustManager
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.coroutines.resume
-import kotlin.text.toLong
 import kotlin.time.Duration.Companion.milliseconds
 
 @Serializable
@@ -218,8 +216,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 header("User-Agent", "oxproxion/${BuildConfig.VERSION_NAME}")
             }
             engine {
+                clientCacheSize = 0
                 config {
-
+                    pingInterval(56, TimeUnit.SECONDS)
+                    retryOnConnectionFailure(true)
                     addInterceptor(CompressionInterceptor(Gzip))
                     addInterceptor(BrotliInterceptor)
                     readTimeout(timeoutMs, TimeUnit.MILLISECONDS)
@@ -282,8 +282,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
 
             engine {
+                clientCacheSize = 0
                 config {
-
+                    pingInterval(56, TimeUnit.SECONDS)
+                    retryOnConnectionFailure(true)
+                    connectionPool(okhttp3.ConnectionPool(3, 90, TimeUnit.SECONDS))
                     // --- START SSL BYPASS (Strictly for LAN) ---
                     val trustAllCerts = object : X509TrustManager {
                         override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
@@ -511,6 +514,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
         httpClient.close()
         lanHttpClient.close()
+        lanTranscriptionHttpClient.close()
     }
 
 
@@ -4213,6 +4217,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         lanHttpClient.close()
         httpClient = createHttpClient()
         lanHttpClient = createLanHttpClient()
+        lanTranscriptionHttpClient = createTransLanHttpClient()
         llmService = LlmService(httpClient, activeChatUrl)
     }
     private fun handleSuccessResponse(
@@ -4817,7 +4822,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         return try {
-            withTimeout(23000) {
+            withTimeout(23000.milliseconds) {
                 withContext(Dispatchers.IO) {
                     val localClient = if (isLanModel) {
                         createLanHttpClient()
@@ -4940,7 +4945,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         return try {
-            withTimeout(15000) {
+            withTimeout(15000.milliseconds) {
                 withContext(Dispatchers.IO) {
                     val localClient = if (isLanModel) {
                         createLanHttpClient()

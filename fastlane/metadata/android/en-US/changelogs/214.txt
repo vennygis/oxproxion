@@ -1,0 +1,3 @@
+- Networking improvements
+- Removed auto copy to clipboard for watermark transcription. Instead, a copy button appears for a few seconds.
+- Updated a couple dependencies.
