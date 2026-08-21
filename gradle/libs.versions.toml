@@ -1,19 +1,19 @@
 [versions]
 activityKtx = "1.13.0"
-agp = "8.13.2"
+agp = "9.3.1"
 oss-licenses-plugin = "0.13.0"
 oss-licenses-parser = "1.2.0"
-fragmentKtx = "1.8.9"
+fragmentKtx = "1.9.0"
 gson = "2.14.0"
-json = "20260719"
+json = "20260814"
 markwon = "4.6.2"
-kotlin = "2.4.10"
-coreKtx = "1.18.0"
+# kotlin = "2.4.10"
+coreKtx = "1.19.0"
 junit = "4.13.2"
 openlocationcode = "1.0.4"
 junitVersion = "1.3.0"
 espressoCore = "3.7.0"
-appcompat = "1.7.1"
+appcompat = "1.8.0"
 kotlinxCoroutinesCore = "1.11.0"
 kotlinxSerializationJson = "1.11.0"
 ktorClientAndroid = "3.5.2"
@@ -24,20 +24,20 @@ navigationFragmentKtx = "2.9.8"
 navigationUiKtx = "2.9.8"
 kotlinSerializationPlugin = "2.4.10"
 kspPlugin = "2.3.6"
-okhttp = "5.4.0"
+okhttp = "5.5.0"
 roomRuntime = "2.8.4"
 coil = "2.7.0"
-prism4j = "2.0.0"
+#prism4j = "2.0.0"
 biometric = "1.1.0"
-commonmark = "0.29.0"
+commonmark = "0.30.0"
 documentfile = "1.1.0"
 [libraries]
 openlocationcode = { group = "com.google.openlocationcode", name = "openlocationcode", version.ref = "openlocationcode" }
 markwon-simple = { module = "io.noties.markwon:simple-ext", version.ref = "markwon"}
 biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
-markwon-syntax-highlight = { module = "io.noties.markwon:syntax-highlight", version.ref = "markwon"}
-prism4j-core    = { module = "io.noties:prism4j", version.ref = "prism4j" }
-prism4j-bundler = { module = "io.noties:prism4j-bundler", version.ref = "prism4j" }
+# markwon-syntax-highlight = { module = "io.noties.markwon:syntax-highlight", version.ref = "markwon"}
+# prism4j-core    = { module = "io.noties:prism4j", version.ref = "prism4j" }
+# prism4j-bundler = { module = "io.noties:prism4j-bundler", version.ref = "prism4j" }
 markwon-image-coil = { module = "io.noties.markwon:image-coil", version.ref = "markwon" }
 linkify = { module = "io.noties.markwon:linkify", version.ref = "markwon" }
 coil-kt = { module = "io.coil-kt:coil", version.ref = "coil" }
@@ -87,7 +87,7 @@ androidx-documentfile = { group = "androidx.documentfile", name = "documentfile"
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+# kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlinSerializationPlugin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "kspPlugin" }
 oss-licenses = { id = "com.google.android.gms.oss-licenses-plugin", version.ref = "oss-licenses-plugin" }
