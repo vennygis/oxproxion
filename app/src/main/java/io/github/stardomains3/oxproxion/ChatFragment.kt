@@ -3532,86 +3532,93 @@ $cleanContent
             var parcelFd: ParcelFileDescriptor? = null
             var tempPdfFile: File? = null
             try {
-                // Try direct ParcelFileDescriptor (OpenDocument makes this reliable)
                 parcelFd = withContext(Dispatchers.IO) {
                     requireContext().contentResolver.openFileDescriptor(pdfUri, "r")
                 } ?: run {
-                    // Fallback copy (rare now)
-                   // Log.d("ChatFragment", "Direct access failed; copying PDF to cache...")
                     val inputStream = requireContext().contentResolver.openInputStream(pdfUri)
                         ?: run {
                             Toast.makeText(requireContext(), "No read access to PDF.", Toast.LENGTH_SHORT).show()
                             return@launch
                         }
 
-                    val cacheDir = requireContext().cacheDir
-                    tempPdfFile = File(cacheDir, "temp_pdf_${System.currentTimeMillis()}.pdf")
+                    tempPdfFile = File(requireContext().cacheDir, "temp_pdf_${System.currentTimeMillis()}.pdf")
                     withContext(Dispatchers.IO) {
                         inputStream.use { input ->
-                            FileOutputStream(tempPdfFile).use { output ->
-                                input.copyTo(output)
-                            }
+                            FileOutputStream(tempPdfFile).use { output -> input.copyTo(output) }
                         }
                     }
-                    inputStream.close()
-
                     ParcelFileDescriptor.open(tempPdfFile, ParcelFileDescriptor.MODE_READ_ONLY)
                 }
 
-                if (parcelFd == null) {
-                    Toast.makeText(requireContext(), "Failed to access PDF.", Toast.LENGTH_SHORT).show()
-                    return@launch
-                }
-
-                // Create renderer once, pass to branches (branches will close it)
-                val pdfRenderer = PdfRenderer(parcelFd)  // Local var for safety
-                val pageCount = pdfRenderer.pageCount
-
-                when {
-                    pageCount == 0 -> {
+                val pdfRenderer = PdfRenderer(parcelFd)
+                when (val pageCount = pdfRenderer.pageCount) {
+                    0 -> {
                         Toast.makeText(requireContext(), "PDF has no pages.", Toast.LENGTH_SHORT).show()
-                        pdfRenderer.close()  // Close if no pages
-                        return@launch
+                        pdfRenderer.close()
+                        parcelFd.close()
                     }
-                    pageCount == 1 -> {
-                        // Single page: Render and close immediately
+                    1 -> {
                         val bitmap = renderPdfPageToBitmap(pdfRenderer, 0)
                         processPdfBitmap(bitmap, "Page 1 of 1")
-                        pdfRenderer.close()  // Close here
+                        pdfRenderer.close()
+                        parcelFd.close()
+                        tempPdfFile?.delete()
                     }
                     else -> {
-                        // Multi-page: Pass renderer to dialog (dialog closes after selection)
-                        showPageSelectionDialog(pdfRenderer, pageCount)  // No pdfUri needed now
+                        // Ownership transfers to the dialog: IT closes renderer + fd + temp file
+                        showPageSelectionDialog(pdfRenderer, parcelFd!!, pageCount, tempPdfFile)
+                        parcelFd = null      // prevent double-close if something throws later
+                        tempPdfFile = null
                     }
                 }
             } catch (e: Exception) {
-              //  Log.e("ChatFragment", "PDF processing error", e)
-                val errorMsg = "Failed to process PDF: ${e.message}"
-                Toast.makeText(requireContext(), errorMsg, Toast.LENGTH_SHORT).show()
-            } finally {
-                // Only close parcelFd and temp file (renderer closed in branches)
-                try {
-                    parcelFd?.close()
-                    tempPdfFile?.delete()
-                } catch (e: Exception) {
-                 //   Log.e("ChatFragment", "Error closing PDF resources", e)
-                }
+                Toast.makeText(requireContext(), "Failed to process PDF: ${e.message}", Toast.LENGTH_SHORT).show()
+                // On any failure here, we still own the resources → close them
+                try { parcelFd?.close() } catch (_: Exception) {}
             }
         }
     }
 
 
-
-
     private suspend fun renderPdfPageToBitmap(renderer: PdfRenderer, pageIndex: Int): Bitmap {
         return withContext(Dispatchers.IO) {
             val page = renderer.openPage(pageIndex)
-            val width = (page.width * 1.5f).toInt() // Scale for quality (adjust if too big)
-            val height = (page.height * 1.5f).toInt()
-            val bitmap = createBitmap(width, height)
+            val scale = 2f
+            val width = (page.width * scale).toInt()
+            val height = (page.height * scale).toInt()
             val bounds = Rect(0, 0, width, height)
-            page.render(bitmap, bounds, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            page.close()  // Close page immediately
+
+            // Pass 1: tiny probe render to determine polarity
+            val probeW = 64
+            val probeH = (64f * height / width).toInt().coerceAtLeast(1)
+            val probe = createBitmap(probeW, probeH)
+            page.render(probe, Rect(0, 0, probeW, probeH), null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+
+            var darkPixels = 0
+            var totalOpaque = 0
+            val pixels = IntArray(probeW * probeH)
+            probe.getPixels(pixels, 0, probeW, 0, 0, probeW, probeH)
+            for (px in pixels) {
+                val alpha = (px ushr 24) and 0xFF
+                if (alpha > 32) {                       // only count actual ink
+                    totalOpaque++
+                    val lum = (0.299f * ((px shr 16) and 0xFF) +
+                            0.587f * ((px shr 8) and 0xFF) +
+                            0.114f * (px and 0xFF))
+                    if (lum < 128) darkPixels++
+                }
+            }
+            probe.recycle()
+
+            // Mostly-dark ink → light theme page → white bg.
+            // Mostly-light ink → dark theme page → black bg.
+            val bgColor = if (totalOpaque == 0 || darkPixels > totalOpaque / 2) Color.WHITE else Color.BLACK
+
+            // Pass 2: full render on chosen background
+            val bitmap = createBitmap(width, height)
+            bitmap.eraseColor(bgColor)
+            page.render(bitmap, bounds, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
+            page.close()
             bitmap
         }
     }
@@ -3664,7 +3671,12 @@ $cleanContent
 
 
 
-    private fun showPageSelectionDialog(pdfRenderer: PdfRenderer, pageCount: Int) {
+    private fun showPageSelectionDialog(
+        pdfRenderer: PdfRenderer,
+        parcelFd: ParcelFileDescriptor,
+        pageCount: Int,
+        tempPdfFile: File?
+    ) {
         val pageTitles = (1..pageCount).map { "Page $it" }.toTypedArray()
         var selectedPage = 0
 
@@ -3672,21 +3684,24 @@ $cleanContent
             .setTitle("Select PDF Page")
             .setSingleChoiceItems(pageTitles, 0) { _, which -> selectedPage = which }
             .setPositiveButton("Convert") { _, _ ->
-                // Launch coroutine: Render, process, then close
                 lifecycleScope.launch {
                     try {
                         val bitmap = renderPdfPageToBitmap(pdfRenderer, selectedPage)
                         processPdfBitmap(bitmap, "Page ${selectedPage + 1} of $pageCount")
+                    } catch (e: Exception) {
+                        Toast.makeText(requireContext(), "Render failed: ${e.message}", Toast.LENGTH_SHORT).show()
                     } finally {
-                        // Close renderer here (after use)—safe, no double-close
                         pdfRenderer.close()
+                        parcelFd.close()
+                        tempPdfFile?.delete()
                     }
                 }
             }
             .setNegativeButton("Cancel", null)
             .setOnCancelListener {
-                // Close if canceled (no render happened)
                 pdfRenderer.close()
+                parcelFd.close()
+                tempPdfFile?.delete()
             }
             .show()
     }

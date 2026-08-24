@@ -1,0 +1,6 @@
+- build.gradle.kts change
+- PDF input optimizations
+And From 2.2.0:
+- Breaking Change: Syntax highlighting in native TextView has been removed to support AGP 9+ compatibility. HTML view remains fully supported.
+- Dependencies updates
+- Action buttons on chat bubbles now scroll horizontally if needed.
