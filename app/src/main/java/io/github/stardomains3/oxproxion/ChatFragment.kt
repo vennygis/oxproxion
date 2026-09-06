@@ -111,6 +111,7 @@ import io.noties.markwon.simple.ext.SimpleExtPlugin
 //import io.noties.markwon.syntax.SyntaxHighlightPlugin
 //import io.noties.prism4j.Prism4j
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
@@ -224,6 +225,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat), OnKeyboardShortcutListene
     private lateinit var removeAttachmentButton: ImageButton
     private lateinit var headerContainer: LinearLayout
     private var overlayView: View? = null
+    private var tempCopyHideJob: Job? = null
     private lateinit var permissionLauncher: ActivityResultLauncher<String>
     private lateinit var cameraLauncher: ActivityResultLauncher<Intent>
     private var currentCameraUri: Uri? = null
@@ -1795,7 +1797,7 @@ class ChatFragment : Fragment(R.layout.fragment_chat), OnKeyboardShortcutListene
             }
         }
         sendChatButton.setOnClickListener {
-            tempCopyButton.visibility = View.GONE
+            hideTempCopyButton()
             if (viewModel.isAwaitingResponse.value == true) {
                 hasScrolled = false
                 viewModel.cancelCurrentRequest()
@@ -2012,7 +2014,7 @@ $cleanContent
                 .commit()
         }
         resetChatButton.setOnLongClickListener {
-            tempCopyButton.visibility = View.GONE
+            hideTempCopyButton()
            /* if (ForegroundService.isRunningForeground && sharedPreferencesHelper.getNotiPreference()) {
                 val apiIdentifier = viewModel.activeChatModel.value ?: "Unknown Model"
                 val displayName = viewModel.getModelDisplayName(apiIdentifier)
@@ -2031,7 +2033,7 @@ $cleanContent
             true
         }
         resetChatButton.setOnClickListener {
-            tempCopyButton.visibility = View.GONE
+            hideTempCopyButton()
             if (viewModel.chatMessages.value.isNullOrEmpty()) {
                 return@setOnClickListener
             }
@@ -2406,7 +2408,7 @@ $cleanContent
 
 
         menuButton.setOnClickListener {
-            tempCopyButton.visibility = View.GONE
+            hideTempCopyButton()
             if (headerContainer.isVisible) {
                 hideMenu()
             } else {
@@ -2744,7 +2746,7 @@ $cleanContent
 
 
         utilityButton.setOnClickListener {
-            tempCopyButton.visibility = View.GONE
+            hideTempCopyButton()
             val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clip = clipboard.primaryClip
             if (clip != null && clip.itemCount > 0) {
@@ -2786,7 +2788,7 @@ $cleanContent
             true
         }
         speechButton.setOnClickListener {
-            tempCopyButton.visibility = View.GONE
+            hideTempCopyButton()
             if (isRecording) {
                 // If already recording, a single tap stops it
                 stopVoiceRecording()
@@ -2800,7 +2802,7 @@ $cleanContent
             }
         }
         speechButton.setOnLongClickListener {
-            tempCopyButton.visibility = View.GONE
+            hideTempCopyButton()
             if (isRecording) {
                 stopVoiceRecording()
             } else {
@@ -2810,7 +2812,7 @@ $cleanContent
         }
 
         clearButton.setOnClickListener {
-            tempCopyButton.visibility = View.GONE
+            hideTempCopyButton()
             chatEditText.text.clear()
         }
         clearButton.setOnLongClickListener {
@@ -4360,33 +4362,47 @@ $cleanContent
         }
     }
     private fun showCopyButton(text: String) {
-        // Show the button
+        // 1. Kill any pending auto-hide from a PREVIOUS transcription
+        tempCopyHideJob?.cancel()
+        tempCopyHideJob = null
+
         tempCopyButton.visibility = View.VISIBLE
 
-        // Setup the click action
         tempCopyButton.setOnClickListener {
             val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clip = ClipData.newPlainText("Transcribed Text", text)
             clipboard.setPrimaryClip(clip)
 
-
+            // User acted → cancel timer + hide now
+            tempCopyHideJob?.cancel()
+            tempCopyHideJob = null
             tempCopyButton.visibility = View.GONE
         }
+
         tempCopyButton.setOnLongClickListener {
             val clipboard = requireContext().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             val clip = ClipData.newPlainText("Transcribed Text", text)
             clipboard.setPrimaryClip(clip)
 
             chatEditText.text.clear()
+
+            tempCopyHideJob?.cancel()
+            tempCopyHideJob = null
             tempCopyButton.visibility = View.GONE
             true
         }
 
-        // Auto-hide after 4 seconds
-        lifecycleScope.launch {
+        // 2. Start a FRESH timer for THIS transcription only
+        tempCopyHideJob = viewLifecycleOwner.lifecycleScope.launch {
             delay(6000.milliseconds)
             tempCopyButton.visibility = View.GONE
+            tempCopyHideJob = null
         }
+    }
+    private fun hideTempCopyButton() {
+        tempCopyHideJob?.cancel()
+        tempCopyHideJob = null
+        tempCopyButton.visibility = View.GONE
     }
     private fun processVoiceRecording(file: File) {
         lifecycleScope.launch {

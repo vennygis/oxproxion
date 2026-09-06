@@ -1,0 +1,6 @@
+*   Build Improvements: Updated Gradle and key dependencies.
+*   Transcription Enhancements:
+    *   Optimized the copy button within the chat interface.
+    *   Improved transcription preset workflows: You can now edit transcriptions directly in the display.
+    *   Replaced auto-copy with a manual copy button.
+    *   Added "Try Again" and "Quit" buttons for better control.
